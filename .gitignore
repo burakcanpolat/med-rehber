@@ -2,21 +2,16 @@
 __pycache__/
 *.pyc
 
-# User image data — never commit
-images/temp/
-images/Seri*/
-images/sample-xrays/
-images/sample-xrays.zip
-
-# Keep placeholder
+# User data — never commit
+images/*
 !images/.gitkeep
 
-# Generated reports — user output, don't commit
+# Generated reports
 reports/*
 !reports/.gitkeep
 
-# Root-level JSON outputs
+# Generated JSON
 /*.json
 
-# Claude project files
+# Claude internals
 .claude/

@@ -1,58 +1,47 @@
 ---
-description: MedGemma tıbbi görüntü analizi ve tıbbi asistanlık kuralları
+description: MedGemma tıbbi görüntü analizi ve tıbbi asistanlık
 alwaysApply: true
 ---
 
 # MedGemma Skills
 
-Tıbbi görüntü analizi ve genel tıbbi asistanlık projesi. MedGemma (Modal) + AI asistan pipeline.
+Tıbbi görüntü analizi ve genel tıbbi asistanlık projesi.
 
 ## Hasta Bilgisi Toplama (Intake)
 
-Herhangi bir analiz yapmadan ÖNCE, kullanıcıdan şu bilgileri al (tek tek sor, form gibi değil):
+Analiz yapmadan ÖNCE, kullanıcıdan şu bilgileri al (tek tek sor):
 
 1. **Bu rapor kimin için?** (kendisi / yakını / genel bilgi)
-2. **Yaş ve cinsiyet** (referans aralıkları ve yorumlama değişir)
-3. **Şikayet/neden** — "Neden bu tetkik yapıldı?" (klinik soru analizi yönlendirir)
-4. **Bilinen hastalıklar** (varsa — kanser öyküsü, kronik hastalık)
+2. **Yaş ve cinsiyet**
+3. **Şikayet/neden** — "Neden bu tetkik yapıldı?"
+4. **Bilinen hastalıklar** (varsa)
 5. **Kullanılan ilaçlar** (varsa)
 
 Bu bilgileri `reports/hasta_bilgisi.md` dosyasına kaydet. Sonraki analizlerde bu dosyayı oku — tekrar sorma.
 
-Acil durum belirtisi varsa (göğüs ağrısı, nefes darlığı, felç belirtileri) → intake'i kes, 112'yi öner.
+Acil durum belirtisi varsa → intake'i kes, 112'yi öner.
 
-## Skill Dosyaları
+## Skill Yönlendirme
 
-- **Tıbbi görüntü** → `skills/radiology-skill.md` oku ve uygula
-- **Lab, ilaç, semptom** → `skills/medical-assistant-skill.md` oku ve uygula
+- **Tıbbi görüntü** → `skills/radiology-skill.md`
+- **Lab, ilaç, semptom** → `skills/medical-assistant-skill.md`
 
 ## MedGemma Pipeline
 
-Tıbbi görüntü analizi için `medgemma_api.py` kullan (kendi vision'ını DEĞİL):
+Görüntü analizi için `scripts/medgemma_api.py` kullan:
 
 ```
-python medgemma_api.py images/xray.jpeg              # tek görüntü
-python medgemma_api.py images/d0.jpg images/d1.jpg    # çoklu
-python medgemma_api.py gorseller.zip                  # ZIP
+python scripts/medgemma_api.py images/xray.jpeg
+python scripts/medgemma_api.py images/d0.jpg images/d1.jpg
+python scripts/medgemma_api.py gorseller.zip
 ```
 
-- Her seri bağımsız analiz edilir (seri ≤85 → tek istek, >85 → 85'lik batch)
-- ZIP → `images/temp/{zip_adı}/` klasörüne çıkar
-- MedGemma İngilizce çıktı verir → sen Türkçe yapılandırılmış rapora dönüştür
+Her seri bağımsız: ≤85 → tek istek, >85 → 85'lik batch. MedGemma İngilizce çıktı verir → sen Türkçe sade rapora dönüştür.
 
 ## Rapor Kaydetme
 
-```
-reports/
-├── hasta_bilgisi.md              ← Hasta context (persistent)
-├── 2026-03-11_gogus-xray_rapor.md
-└── 2026-03-11_toplu-analiz_rapor.md
-```
+`reports/YYYY-MM-DD_kisa-aciklama_rapor.md` formatında kaydet.
 
-Rapor dosya adı: `YYYY-MM-DD_açıklayıcı-isim_rapor.md`
+## Dil
 
-## Dil ve Üslup
-
-- Türkçe, sade, herkesin anlayacağı dil
-- Tıbbi terim gerektiğinde parantez içinde açıkla: "konsolidasyon (akciğerde sıvı birikmesi)"
-- Her raporun sonunda sorumluluk reddi ekle
+Türkçe, sade, herkesin anlayacağı. Tıbbi terim gerekirse parantez içinde açıkla.
