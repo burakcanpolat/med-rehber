@@ -4,6 +4,7 @@ Sends images to MedGemma model deployed on Modal.
 Includes ZIP smart-routing, series detection, batch processing, and JSON report saving.
 
 All images are sent as base64-encoded data inline in the JSON request.
+DICOM files (.dcm) are automatically converted to JPEG with appropriate windowing before analysis.
 
 Cold start handling:
   Before the first analysis, the script checks if the server is ready. If the Modal
@@ -12,9 +13,10 @@ Cold start handling:
 Modal config: --limit-mm-per-prompt image=85 (max 85 images per request)
 
 Usage:
-  python3 scripts/medgemma_api.py image.jpeg                 # single image
-  python3 scripts/medgemma_api.py image1.jpg image2.jpg      # multiple images
-  python3 scripts/medgemma_api.py archive.zip                # ZIP archive
+  python3 scripts/medgemma_api.py images/xray.jpeg              # single image
+  python3 scripts/medgemma_api.py scan.dcm                      # single DICOM
+  python3 scripts/medgemma_api.py images/d0.jpg images/d1.jpg   # multiple images
+  python3 scripts/medgemma_api.py archive.zip                   # ZIP archive (JPEG, DICOM, or mixed)
 
 Note: On Windows, use `python` instead of `python3` if `python3` is not available.
 """
@@ -56,12 +58,30 @@ _load_env()
 
 ENDPOINT = os.environ.get("MEDGEMMA_ENDPOINT", "")
 MODEL = os.environ.get("MEDGEMMA_MODEL", "google/medgemma-1.5-4b-it")
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".dcm", ".dicom"}
 _MIME_MAP = {
     ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
     ".png": "image/png", ".bmp": "image/bmp",
     ".tiff": "image/tiff", ".tif": "image/tiff",
+    ".dcm": "image/jpeg", ".dicom": "image/jpeg",  # converted to JPEG before sending
 }
+
+# DICOM support — lazy import to avoid hard dependency
+_dicom_utils = None
+
+
+def _get_dicom_utils():
+    """Lazy-import dicom_utils module."""
+    global _dicom_utils
+    if _dicom_utils is None:
+        from pathlib import Path as _P
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "dicom_utils", _P(__file__).resolve().parent / "dicom_utils.py"
+        )
+        _dicom_utils = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_dicom_utils)
+    return _dicom_utils
 
 MAX_IMAGES_PER_REQUEST = 85  # Modal vLLM config: --limit-mm-per-prompt image=85
 
@@ -248,10 +268,55 @@ def _api_call(content: list[dict], max_tokens: int = 1024, timeout: int = 300) -
 # ---------------------------------------------------------------------------
 
 def _image_content(image_path: Path) -> dict:
-    """Build an image_url content block using base64 encoding."""
+    """Build an image_url content block using base64 encoding.
+
+    DICOM files are converted to JPEG before encoding.
+    """
+    if image_path.suffix.lower() in (".dcm", ".dicom"):
+        du = _get_dicom_utils()
+        jpeg_bytes = du.dicom_to_jpeg_bytes(image_path)
+        b64 = base64.b64encode(jpeg_bytes).decode()
+        return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+
     mime = _MIME_MAP.get(image_path.suffix.lower(), "image/png")
     b64 = base64.b64encode(image_path.read_bytes()).decode()
     return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+
+
+def _dicom_multi_window_content(image_path: Path) -> list[dict]:
+    """Build multiple image_url content blocks for CT multi-window rendering.
+
+    For CT: returns one image per window preset (soft_tissue, lung, bone).
+    For non-CT (MRI, X-ray, etc.): returns a single image with default windowing.
+    """
+    du = _get_dicom_utils()
+    windows = du.dicom_to_multi_window(image_path)
+    content = []
+    for _name, jpeg_bytes in windows:
+        b64 = base64.b64encode(jpeg_bytes).decode()
+        content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
+    return content
+
+
+def _is_dicom(path: Path) -> bool:
+    """Check if a file is DICOM format (extension or magic bytes)."""
+    if path.suffix.lower() in (".dcm", ".dicom"):
+        return True
+    # Magic bytes fallback for extensionless DICOM files
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(128)
+            return fh.read(4) == b"DICM"
+    except (OSError, IOError):
+        return False
+
+
+def _get_dicom_metadata_text(image_path: Path) -> str:
+    """Extract DICOM metadata and format as prompt context text."""
+    du = _get_dicom_utils()
+    ds = du.read_dicom(image_path)
+    meta = du.extract_metadata(ds)
+    return du.build_dicom_prompt_context(meta)
 
 
 # ---------------------------------------------------------------------------
@@ -260,10 +325,31 @@ def _image_content(image_path: Path) -> dict:
 
 def analyze_image(image_path: str | Path,
                   prompt: str = "Analyze this medical image. Provide detailed findings.") -> str:
-    """Analyze a single image with MedGemma."""
+    """Analyze a single image with MedGemma.
+
+    DICOM files get multi-window rendering (for CT) and metadata-enriched prompts.
+    """
     path = Path(image_path)
     if not path.exists():
         return f"ERROR: File not found: {image_path}"
+
+    if _is_dicom(path):
+        # Enrich prompt with DICOM metadata
+        try:
+            meta_text = _get_dicom_metadata_text(path)
+            enriched_prompt = f"{prompt}\n\n{meta_text}"
+        except Exception:
+            enriched_prompt = prompt
+
+        # Multi-window content (CT: multiple images, MRI/XR: single)
+        try:
+            image_blocks = _dicom_multi_window_content(path)
+        except Exception:
+            image_blocks = [_image_content(path)]
+
+        content: list[dict] = [{"type": "text", "text": enriched_prompt}]
+        content.extend(image_blocks)
+        return _api_call(content, max_tokens=1024, timeout=300)
 
     content = [{"type": "text", "text": prompt}, _image_content(path)]
     return _api_call(content, max_tokens=1024, timeout=300)
@@ -271,17 +357,33 @@ def analyze_image(image_path: str | Path,
 
 def analyze_multiple(image_paths: list[str | Path],
                      prompt: str = "Compare these medical images. Analyze progression.") -> str:
-    """Send multiple images to MedGemma in a single request (max 85)."""
+    """Send multiple images to MedGemma in a single request (max 85).
+
+    DICOM files are converted to JPEG. For series of DICOM files, metadata
+    from the first file is included in the prompt.
+    """
+    paths = [Path(p) for p in image_paths]
+
+    # Check if any/all are DICOM — enrich prompt with metadata from first DICOM
+    dicom_paths = [p for p in paths if _is_dicom(p)]
+    if dicom_paths:
+        try:
+            meta_text = _get_dicom_metadata_text(dicom_paths[0])
+            prompt = f"{prompt}\n\n{meta_text}"
+        except Exception:
+            pass
+
+    # For DICOM series: use single-window to stay within 85-image limit
+    # (multi-window would multiply image count by 2-3x)
     content: list[dict] = [{"type": "text", "text": prompt}]
 
-    total = len(image_paths)
+    total = len(paths)
     if total > MAX_IMAGES_PER_REQUEST:
         return f"ERROR: Too many images ({total}). Maximum is {MAX_IMAGES_PER_REQUEST} per request. Use analyze_series() for batching."
 
-    for p in image_paths:
-        path = Path(p)
+    for path in paths:
         if not path.exists():
-            return f"ERROR: File not found: {p}"
+            return f"ERROR: File not found: {path}"
         content.append(_image_content(path))
 
     return _api_call(content, max_tokens=2048, timeout=600)
@@ -334,14 +436,16 @@ def extract_zip(zip_path: str | Path) -> tuple[list[Path], Path]:
 def detect_series(image_paths: list[Path], extraction_root: Path) -> dict[str, list[Path]]:
     """
     Group images by series.
+    - For DICOM files without subdirs: group by SeriesInstanceUID
     - If subdirectories exist: each subdirectory = one series
-    - If no subdirectories: all files = single series
+    - If no subdirectories (non-DICOM): all files = single series
     """
     subdirs: dict[str, list[Path]] = {}
     flat: list[Path] = []
+    extraction_root = Path(extraction_root).resolve()
 
     for p in image_paths:
-        rel = p.relative_to(extraction_root)
+        rel = p.resolve().relative_to(extraction_root)
         parts = rel.parts
         if len(parts) > 1:
             series_name = parts[0]
@@ -354,6 +458,17 @@ def detect_series(image_paths: list[Path], extraction_root: Path) -> dict[str, l
             subdirs["_other"] = sorted(flat)
         return {k: sorted(v) for k, v in subdirs.items()}
 
+    # For flat DICOM files: try grouping by SeriesInstanceUID
+    flat_dicom = [p for p in image_paths if _is_dicom(p)]
+    if flat_dicom and len(flat_dicom) == len(image_paths):
+        try:
+            du = _get_dicom_utils()
+            groups = du.group_by_series(flat_dicom)
+            if groups:
+                return groups
+        except Exception:
+            pass
+
     return {"all_images": sorted(image_paths)}
 
 
@@ -364,12 +479,23 @@ def detect_series(image_paths: list[Path], extraction_root: Path) -> dict[str, l
 def analyze_series(series_name: str, images: list[Path]) -> dict:
     """
     Analyze a single series.
+    - DICOM files are sorted by slice position before analysis
     - <=85 images -> send all in a single request
-    - >85 images -> split into batches of 85
+    - >85 images -> smart slice selection for DICOM, batching for regular images
     """
     total = len(images)
+
+    # Sort DICOM files by slice position for correct anatomical order
+    has_dicom = any(_is_dicom(p) for p in images)
+    if has_dicom:
+        try:
+            du = _get_dicom_utils()
+            images = du.sort_dicom_by_position(images)
+        except Exception:
+            pass
+
     print(f"\n{'='*60}")
-    print(f"  SERIES: {series_name} ({total} images)")
+    print(f"  SERIES: {series_name} ({total} images{'  [DICOM]' if has_dicom else ''})")
     print(f"{'='*60}")
 
     series_result = {
@@ -377,6 +503,32 @@ def analyze_series(series_name: str, images: list[Path]) -> dict:
         "total_images": total,
         "batches": [],
     }
+
+    # For large DICOM series: use smart slice selection instead of batching
+    if has_dicom and total > MAX_IMAGES_PER_REQUEST:
+        try:
+            du = _get_dicom_utils()
+            selected = du.select_slices(images, MAX_IMAGES_PER_REQUEST, presorted=True)
+            print(f"  -> DICOM series: selected {len(selected)} of {total} slices (uniform sampling)")
+            prompt = (
+                f"These are {len(selected)} representative slices (uniformly sampled from {total} total) "
+                f"of a medical imaging series. "
+                "Analyze the complete series: describe the imaging modality, body region, "
+                "and all notable findings. Note any changes across slices."
+            )
+            answer = analyze_multiple(selected, prompt)
+            print(f"  -> Result: {answer[:200]}...")
+            series_result["batches"].append({
+                "batch": 1,
+                "image_count": len(selected),
+                "total_in_series": total,
+                "sampling": f"{len(selected)} of {total} (uniform)",
+                "images": [p.name for p in selected],
+                "analysis": answer,
+            })
+            return series_result
+        except Exception:
+            pass  # Fall through to standard batching
 
     if total <= MAX_IMAGES_PER_REQUEST:
         print(f"  -> Sending {total} images in a single request...")
@@ -492,9 +644,10 @@ def process_zip(zip_path: str | Path) -> dict:
 
 def _print_usage():
     print("Usage:")
-    print("  python3 scripts/medgemma_api.py image.jpeg                 # single image")
-    print("  python3 scripts/medgemma_api.py image1.jpg image2.jpg      # multiple images")
-    print("  python3 scripts/medgemma_api.py archive.zip                # ZIP archive")
+    print("  python3 scripts/medgemma_api.py images/xray.jpeg              # single image")
+    print("  python3 scripts/medgemma_api.py scan.dcm                      # single DICOM")
+    print("  python3 scripts/medgemma_api.py images/d0.jpg images/d1.jpg   # multiple images")
+    print("  python3 scripts/medgemma_api.py archive.zip                   # ZIP archive (JPEG, DICOM, or mixed)")
 
 
 if __name__ == "__main__":

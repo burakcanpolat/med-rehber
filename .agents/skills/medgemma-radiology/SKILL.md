@@ -1,6 +1,6 @@
 ---
 name: medgemma-radiology
-description: Analyzes medical images (X-ray, CT, MRI) using MedGemma. Use when the user provides medical images for analysis, asks about radiological findings, or wants image comparison across time series.
+description: Analyzes medical images (X-ray, CT, MRI, DICOM) using MedGemma. Use when the user provides medical images or DICOM files for analysis, asks about radiological findings, or wants image comparison across time series. DICOM files are automatically converted with appropriate windowing.
 license: MIT
 metadata:
   author: burakcanpolat
@@ -54,12 +54,27 @@ Use the section headers matching the user's chosen language:
 - What should you ask the doctor? (guide the user)
 - If additional tests are needed, explain simply: "you may need a CT scan"
 
+## DICOM Support
+
+When the user provides `.dcm` files (single, multiple, or in a ZIP):
+
+- **Automatic conversion:** DICOM files are converted to JPEG with appropriate windowing by `scripts/dicom_utils.py`
+- **CT scans:** Multi-window rendering (soft tissue, lung, bone) — each window sent as a separate image
+- **MRI:** Percentile normalization (1st–99th percentile) for optimal contrast
+- **X-ray (CR/DX):** Uses DICOM-embedded VOI LUT window settings
+- **Metadata enrichment:** Modality, body part, and series description are extracted from DICOM tags and included in the analysis prompt for better results
+- **Large DICOM series:** Smart slice selection (uniform sampling) instead of batching — always includes first and last slices
+- **Series grouping:** DICOM files without subdirectories are grouped by SeriesInstanceUID
+
+Include DICOM metadata context when reporting findings: mention the modality, body region, and window settings used.
+
 ## Multi-Image / Series Analysis
 
 - Analyze each image separately, then add a **COMPARISON** section
 - For time series, describe the change simply: "the inflammation in the lung has spread over 3 days"
 - Subdirectories in a ZIP = separate series → separate analysis per series, then overall comparison
 - For large series (>85 images), the script batches them in groups of 85 and analyzes each batch separately
+- For large DICOM series (>85 slices), smart slice selection is used instead of batching
 - **Important:** The script prints truncated results to stdout. For full results, read the saved JSON file in `reports/` (the path is printed at the end as `[REPORT] Saved: ...`). Use the full JSON content when writing the report.
 
 ## MedGemma Pipeline
@@ -67,10 +82,12 @@ Use the section headers matching the user's chosen language:
 For image analysis, use `scripts/medgemma_api.py`:
 ```bash
 python3 scripts/medgemma_api.py images/xray.jpeg              # single image
-python3 scripts/medgemma_api.py images/d0.jpg images/d1.jpg    # multiple images
-python3 scripts/medgemma_api.py archive.zip                    # ZIP archive
+python3 scripts/medgemma_api.py scan.dcm                      # single DICOM
+python3 scripts/medgemma_api.py images/d0.jpg images/d1.jpg   # multiple images
+python3 scripts/medgemma_api.py archive.zip                   # ZIP archive (JPEG, DICOM, or mixed)
 ```
 
+DICOM files (.dcm) are automatically converted to JPEG with appropriate windowing before analysis.
 All images are sent as base64-encoded data inline in the request.
 **Cold start:** Handled automatically — single request with long timeout, progress shown locally (1-3 min).
 

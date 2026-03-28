@@ -38,9 +38,13 @@ If the user says "settings", "ayarlar" → show the contents of `.env`.
 
 ## Skill Routing
 
-- **Setup / install** → Read and apply `skills/setup-skill.md`
-- **Medical images** (X-ray, CT, MRI) → Read and apply `skills/radiology-skill.md`
-- **Lab results, medications, symptoms, medical reports** → Read and apply `skills/medical-assistant-skill.md`
+| User says / provides | Skill to apply |
+|----------------------|----------------|
+| "setup", "install", "kurulum", "get started" | `skills/setup-skill.md` |
+| Medical images (X-ray, CT, MRI, DICOM files) | `skills/radiology-skill.md` |
+| `.dcm` file, ZIP with DICOM, "analyze this scan" | `skills/radiology-skill.md` |
+| Lab results, blood work, medications, symptoms | `skills/medical-assistant-skill.md` |
+| Drug interactions, medical report text | `skills/medical-assistant-skill.md` |
 
 ## Patient Intake
 
@@ -63,10 +67,12 @@ For image analysis, use `scripts/medgemma_api.py`:
 
 ```bash
 python3 scripts/medgemma_api.py images/xray.jpeg              # single image
-python3 scripts/medgemma_api.py images/d0.jpg images/d1.jpg    # multiple images
-python3 scripts/medgemma_api.py archive.zip                    # ZIP archive
+python3 scripts/medgemma_api.py scan.dcm                      # single DICOM
+python3 scripts/medgemma_api.py images/d0.jpg images/d1.jpg   # multiple images
+python3 scripts/medgemma_api.py archive.zip                   # ZIP archive (JPEG, DICOM, or mixed)
 ```
 
+DICOM files (.dcm) are automatically converted to JPEG with appropriate windowing before analysis.
 All images are sent as base64-encoded data inline in the request.
 
 **Cold start handling:** On first request, the script sends a single readiness check with a long timeout (no polling). If the Modal container is cold-starting, progress messages are shown locally while waiting. Typically takes 1-3 minutes.

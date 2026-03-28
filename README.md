@@ -33,6 +33,7 @@ med-rehber/
 │   └── medical-assistant-skill.md
 ├── scripts/
 │   ├── medgemma_api.py               ← MedGemma API client
+│   ├── dicom_utils.py                ← DICOM to JPEG conversion & metadata extraction
 │   └── modal_medgemma.py             ← Modal deployment script
 ├── setup.sh                          ← Setup script (macOS/Linux)
 ├── setup.bat                         ← Setup script (Windows)
@@ -183,19 +184,21 @@ Ask the AI assistant in your editor:
 
 ```bash
 python3 scripts/medgemma_api.py images/xray.jpeg              # single image
-python3 scripts/medgemma_api.py images/d0.jpg images/d1.jpg    # multiple images
-python3 scripts/medgemma_api.py archive.zip                    # ZIP archive
+python3 scripts/medgemma_api.py scan.dcm                      # single DICOM
+python3 scripts/medgemma_api.py images/d0.jpg images/d1.jpg   # multiple images
+python3 scripts/medgemma_api.py archive.zip                   # ZIP archive (JPEG, DICOM, or mixed)
 ```
 
-> All images are sent as base64-encoded data inline in the request. Cold starts are handled automatically with progress feedback (typically 1-3 minutes).
+> DICOM files (.dcm) are automatically converted to JPEG with appropriate windowing before analysis. All images are sent as base64-encoded data inline in the request. Cold starts are handled automatically with progress feedback (typically 1-3 minutes).
 
 ### Pipeline
 
 ```
-Patient info → Image → scripts/medgemma_api.py → Modal (MedGemma)
+Patient info → Image/DICOM → scripts/medgemma_api.py → Modal (MedGemma)
+  ├── DICOM? → auto-convert to JPEG + extract metadata
   ├── Cold start? → single request + progress feedback
   ├── Series ≤85 → single request
-  └── Series >85 → batches of 85
+  └── Series >85 → smart slice selection
         ↓
 AI Assistant → Report in your language → reports/
 ```
@@ -239,6 +242,7 @@ Med-Rehber supports **English** and **Turkish**. On first use, the AI will ask y
 - Modal account (free — $30/month credit, created during setup)
 - HuggingFace account (free — needed to access MedGemma model)
 - Modal CLI (installed during setup: `uv tool install modal`)
+- pydicom, numpy, Pillow (installed during setup — needed for DICOM support)
 
 ## License
 
@@ -250,7 +254,7 @@ MIT — [LICENSE](LICENSE)
 
 ## Türkçe Kurulum
 
-**Med-Rehber** tıbbi görüntü analizi ve klinik yardım için açık kaynak AI skill paketidir. **Zed**, **Cursor** ve **Claude Code** ile çalışır.
+**Med-Rehber** tıbbi görüntü analizi ve klinik yardım için açık kaynak AI skill paketidir. DICOM, JPEG ve PNG formatlarını destekler. **Zed**, **Cursor** ve **Claude Code** ile çalışır.
 
 ### Hızlı Başlangıç (Zed + OpenRouter)
 
