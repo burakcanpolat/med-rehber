@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/chiron-cover.gif" alt="Med-Guide — Chiron, the Wounded Healer" width="800">
+
 # Med-Guide
 
 **Your AI guide for understanding medical results in plain language.**
