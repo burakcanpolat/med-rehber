@@ -75,7 +75,6 @@ def serve():
         "--host", "0.0.0.0",
         "--port", str(VLLM_PORT),
         "--served-model-name", MODEL_NAME,
-        "--trust-remote-code",
         "--dtype", "bfloat16",
         "--max-model-len", "32768",
         "--enforce-eager",
